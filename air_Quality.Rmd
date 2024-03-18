@@ -1,0 +1,263 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(tsibble)      
+library(dplyr)       
+library(ggplot2)      
+library(forecast)    
+library(tseries)      
+library(lubridate) 
+library(vars)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+
+```{r}
+#Reading the data
+air_data <- read.csv("ad_viz_plotval_data.csv")
+ 
+head(air_data)
+summary(air_data)
+str(air_data)
+```
+```{r}
+air_data$Date <- as.Date(air_data$Date, format = "%Y-%m-%d")
+
+air_data <- na.omit(air_data)
+```
+
+```{r}
+sum(is.na(air_data$`Coconcentration`))
+
+sum(is.na(air_data$Date))
+
+sum(is.na(air_data$DAILY_AQI_VALUE))
+
+```
+```{r}
+summary(air_data$Coconcentration)
+summary(air_data$Date)
+summary(air_data$DAILY_AQI_VALUE)
+```
+
+```{r}
+#EDA
+ggplot(air_data, aes(x = Date, y = Coconcentration)) + 
+    geom_line() + 
+    labs(title = "Time Series Plot of CO concentration")
+
+ggplot(air_data, aes(x = Date, y = DAILY_AQI_VALUE)) + 
+    geom_line() + 
+    labs(title = "Time Series Plot of Air Quality Indicator")
+
+
+```
+```{r}
+#scatter plot for both the variables
+
+plot(air_data$Coconcentration, air_data$DAILY_AQI_VALUE, 
+     main = "Scatter Plot of CO Concentration vs. Daily AQI Value",
+     xlab = "CO Concentration",
+     ylab = "Daily AQI Value",
+     pch = 19, col = "blue")
+
+```
+
+
+```{r}
+# Identify numeric columns
+numeric_columns <- sapply(air_data, is.numeric)
+
+# Filter the dataset to include only numeric columns
+air_data_numeric <- air_data[, numeric_columns]
+
+# Compute correlation matrix for numeric columns
+correlation_matrix <- cor(air_data_numeric)
+# Load the corrplot library for visualization
+library(corrplot)
+
+# Visualize the correlation matrix
+corrplot(correlation_matrix, method = "circle")
+
+```
+```{r}
+# Basic box plot
+boxplot(air_data$Coconcentration, main="Box Plot of CO concentration", ylab="Values")
+```
+```{r}
+boxplot(air_data$DAILY_AQI_VALUE, main="Box Plot of Daily AQI Index", ylab="Values")
+```
+
+```{r}
+#autocorrelation plot
+acf(air_data$DAILY_AQI_VALUE)
+```
+```{r}
+# Partial Autocorrelation Plot
+pacf(air_data$DAILY_AQI_VALUE)
+```
+```{r}
+# Autocorrelation Plot
+acf(air_data$Coconcentration)
+```
+```{r}
+# Partial Autocorrelation Plot
+pacf(air_data$Coconcentration)
+```
+```{r}
+air_data_ts_var1 <- ts(air_data$DAILY_AQI_VALUE, frequency = 12)
+air_data_ts_var2 <- ts(air_data$Coconcentration, frequency = 12)
+
+```
+```{r}
+stl_decomp <- stl(air_data_ts_var1, s.window = "periodic")
+autoplot(stl_decomp)
+
+stl_decomp <- stl(air_data_ts_var2, s.window = "periodic")
+autoplot(stl_decomp)
+
+```
+
+```{r}
+adf_result_var1 <- adf.test(air_data_ts_var1)
+print(adf_result_var1)
+
+adf_result_var2 <- adf.test(air_data_ts_var2)
+print(adf_result_var2)
+
+```
+```{r}
+final_model <- auto.arima(y = air_data_ts_var1, xreg = air_data_ts_var2)
+summary(final_model)
+checkresiduals(final_model)
+```
+```{r}
+forecast_values <- forecast(final_model, xreg = air_data_ts_var2, h = 1)
+
+single_forecast <- as.numeric(forecast_values$mean[1])
+
+cat("Next predicted value is", single_forecast, "\n")
+autoplot(forecast_values)
+```
+
+```{r}
+air_data_combined <- cbind(air_data_ts_var1, air_data_ts_var2)
+
+lag_selection <- VARselect(air_data_combined, type = "const")
+optimal_lag <- lag_selection$selection["AIC(n)"]
+
+var_model <- VAR(y = air_data_combined, p = optimal_lag, type = "const")
+
+summary(var_model)
+
+serial.test(var_model)
+
+autoplot(residuals(var_model))
+```
+
+```{r}
+forecast_values_var <- forecast(var_model, h = 1)
+single_forecast <- forecast_values_var$forecast$air_data_ts_var1$mean
+cat("Next predicted value for the first variable is", single_forecast)
+plot(forecast_values_var)
+```
+```{r}
+n <- length(air_data_ts_var1)
+initial_window <- 100  
+horizon <- 1           
+n_folds <- n - initial_window - horizon + 1
+
+rmse_values_arima <- numeric(n_folds)
+
+for(i in 1:n_folds) {
+  train_set <- air_data_ts_var1[1:(initial_window + i - 1)]
+  test_set <- air_data_ts_var1[(initial_window + i):(initial_window + i + horizon - 1)]
+  
+  fit_arima <- auto.arima(train_set)
+  
+  forecast_arima <- forecast(fit_arima, h = horizon)
+  predicted_arima <- forecast_arima$mean
+  
+  rmse_values_arima[i] <- sqrt(mean((predicted_arima - test_set)^2))
+}
+average_rmse_arima <- mean(rmse_values_arima)
+cat("Average RMSE for RegARIMA model:", average_rmse_arima, "\n")
+
+```
+```{r}
+train_data <- air_data_combined[1 : floor(0.8 * nrow(air_data_combined)), ]  
+test_data <- air_data_combined[(floor(0.8 * nrow(air_data_combined)) + 1) : nrow(air_data_combined), ]
+
+p_order <- optimal_lag  
+model_var <- VAR(ts(train_data), p = p_order, type = "const")
+
+
+forecast_no = 29
+forecast_var <- predict(model_var, n.ahead = forecast_no)
+
+mae_var <- mean(abs(forecast_var$fcst[[1]][, "fcst"] - test_data[, 1][1:forecast_no]))
+
+print(paste("MAE for VAR:", mae_var))
+```
+
+```{r}
+forecast_var <- predict(model_var, n.ahead = forecast_no)
+predicted_values <- forecast_var$fcst$air_data_ts_var1[, "fcst"]
+predicted_values
+head(test_data)
+actual_values <- head(test_data[0], forecast_no)
+if (length(predicted_values) == length(actual_values)) {
+  mae_var <- mean(abs(predicted_values - actual_values), na.rm = TRUE)
+  print(paste("MAE for VAR:", mae_var))
+} else {
+  print("The lengths of predicted and actual values do not match.")
+}
+```
+```{r}
+forecast_no = 29
+predicted_values <- forecast_var$fcst$air_data_ts_var1[, "fcst"]
+predicted_values <- predicted_values[0:29]
+
+# Make sure 'forecast_no' does not exceed the length of 'test_data'
+available_test_points <- nrow(test_data)
+if (forecast_no > available_test_points) {
+  cat("Warning: forecast_no exceeds the available number of points in test_data. Adjusting to", available_test_points, "\n")
+  forecast_no <- available_test_points
+}
+
+# Extract the actual values for the comparison, ensuring the length matches 'forecast_no'
+actual_values <- test_data[, 1][1:forecast_no]
+
+# Print lengths for debugging
+cat("Length of predicted values:", length(predicted_values), "\n")
+cat("Length of actual values:", length(actual_values), "\n")
+
+if (length(predicted_values) == length(actual_values)) {
+  r <- sqrt(mean((predicted_values - actual_values)^2, na.rm = TRUE))
+  print(paste("RMSE for VAR:", r))
+} else {
+  print("Adjusted lengths of predicted and actual values still do not match.")
+}
+```
+
+
+
+
+
+
+
+
+
+
